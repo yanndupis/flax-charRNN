@@ -29,7 +29,7 @@ flags.DEFINE_float(
     "learning_rate", default=0.001, help=("The learning rate for the Adam optimizer.")
 )
 
-flags.DEFINE_integer("batch_size", default=32, help=("Batch size for training."))
+flags.DEFINE_integer("batch_size", default=35, help=("Batch size for training."))
 
 flags.DEFINE_integer("num_epochs", default=20, help=("Number of training epochs."))
 
@@ -58,23 +58,24 @@ def compute_cross_entropy(logits, targets):
 
 
 @jax.jit
-def train_step(optimizer, inputs, seq_len, targets, rng):
+def train_step(optimizer, inputs, carry, seq_len, targets, rng):
     rng, new_rng = jax.random.split(rng)
 
     def loss_fn(model):
         with nn.stochastic(rng):
-            logits = model(inputs, seq_len)
+            _, logits = model(inputs, carry)
             loss = jnp.mean(compute_cross_entropy(logits, targets))
-        return loss, logits
+        return loss, (logits, carry)
 
-    (loss, _), grad = jax.value_and_grad(loss_fn, has_aux=True)(optimizer.target)
+    (loss, out), grad = jax.value_and_grad(loss_fn, has_aux=True)(optimizer.target)
     optimizer = optimizer.apply_gradient(grad)
-    return optimizer, loss, new_rng
+    _, carry = out
+    return optimizer, loss, carry, new_rng
 
 
 @jax.jit
-def eval_step(model, inputs, seq_len, targets):
-    logits = model(inputs, seq_len)
+def eval_step(model, inputs, carry, seq_len, targets):
+    _, logits = model(inputs, carry)
     loss = jnp.mean(compute_cross_entropy(logits, targets))
     return loss
 
@@ -89,14 +90,14 @@ def log(epoch, train_metrics, valid_metrics):
     )
 
 
-def evaluate(model, dataset):
+def evaluate(model, carry, dataset):
     count = 0
     total_loss = 0.0
 
     for i in range(len(dataset) // FLAGS.batch_size):
         inputs, targets = get_batch(dataset, FLAGS.seq_len, i)
         count = count + inputs.shape[0]
-        loss = eval_step(model, inputs, FLAGS.seq_len, targets)
+        loss = eval_step(model, inputs, carry, FLAGS.seq_len, targets)
         total_loss += loss.item()
 
     loss = total_loss / count
@@ -111,15 +112,20 @@ def train_model(
     train_metrics = collections.defaultdict(float)
     rng = jax.random.PRNGKey(seed)
     optimizer = flax.optim.Adam(learning_rate=learning_rate).create(model)
+    carry = nn.GRUCell.initialize_carry(
+        jax.random.PRNGKey(0), (FLAGS.batch_size,), FLAGS.hidden_size
+    )
 
     for epoch in range(num_epochs):
         for i in range(len(train_data) // batch_size):
             data, targets = get_batch(train_data, seq_len, i)
-            optimizer, loss, rng = train_step(optimizer, data, seq_len, targets, rng)
+            optimizer, loss, carry_new, rng = train_step(
+                optimizer, data, carry, seq_len, targets, rng
+            )
             train_metrics["loss"] += loss * data.shape[0]
             train_metrics["total"] += data.shape[0]
 
-        valid_metrics = evaluate(optimizer.target, valid_data)
+        valid_metrics = evaluate(optimizer.target, carry_new, valid_data)
 
         log(epoch, train_metrics, valid_metrics)
 
@@ -137,11 +143,11 @@ def main(argv):
     charnn = model.create_model(
         seed=FLAGS.seed,
         batch_size=FLAGS.batch_size,
-        max_len=FLAGS.seq_len,
         model_kwargs=dict(
+            seq_len=FLAGS.seq_len,
             vocab_size=65,
             embedding_size=FLAGS.embedding_size,
-            hidden_size=FLAGS.embedding_size,
+            hidden_size=FLAGS.hidden_size,
             output_size=65,
         ),
     )
