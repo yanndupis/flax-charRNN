@@ -68,7 +68,9 @@ def train_step(optimizer, inputs, carry, seq_len, targets, rng):
             loss = jnp.mean(compute_cross_entropy(logits, targets))
         return loss, (logits, carry)
 
-    (loss, out), grad = jax.value_and_grad(loss_fn, has_aux=True)(optimizer.target, carry)
+    (loss, out), grad = jax.value_and_grad(loss_fn, has_aux=True)(
+        optimizer.target, carry
+    )
     optimizer = optimizer.apply_gradient(grad)
     _, carry = out
     return optimizer, loss, carry, new_rng
@@ -76,9 +78,9 @@ def train_step(optimizer, inputs, carry, seq_len, targets, rng):
 
 @jax.jit
 def eval_step(model, inputs, carry, seq_len, targets):
-    _, logits = model(inputs, carry)
+    carry, logits = model(inputs, carry)
     loss = jnp.mean(compute_cross_entropy(logits, targets))
-    return loss
+    return loss, carry
 
 
 def log(epoch, train_metrics, valid_metrics):
@@ -91,14 +93,18 @@ def log(epoch, train_metrics, valid_metrics):
     )
 
 
-def evaluate(model, carry, dataset):
+def evaluate(model, dataset):
     count = 0
     total_loss = 0.0
+
+    carry = nn.GRUCell.initialize_carry(
+        jax.random.PRNGKey(0), (FLAGS.batch_size,), FLAGS.hidden_size
+    )
 
     for i in range(len(dataset) // FLAGS.batch_size):
         inputs, targets = get_batch(dataset, FLAGS.seq_len, i)
         count = count + inputs.shape[0]
-        loss = eval_step(model, inputs, carry, FLAGS.seq_len, targets)
+        loss, carry = eval_step(model, inputs, carry, FLAGS.seq_len, targets)
         total_loss += loss.item()
 
     loss = total_loss / count
@@ -126,12 +132,12 @@ def train_model(
             train_metrics["loss"] += loss * data.shape[0]
             train_metrics["total"] += data.shape[0]
 
-        # valid_metrics = evaluate(optimizer.target, carry_new, valid_data)
-        valid_metrics = dict(loss=0)
+        valid_metrics = evaluate(optimizer.target, valid_data)
         log(epoch, train_metrics, valid_metrics)
 
     save_checkpoint(".", optimizer.target, epoch + 1, keep=1)
     return optimizer.target
+
 
 def generate_text(model, vocab, max_length=100, temperature=0.5, start_letter="B"):
     new_model = restore_checkpoint(".", model)
@@ -154,12 +160,13 @@ def main(argv):
     data = nlp.load_dataset("tiny_shakespeare")
     train_data = data["train"][0]["text"]
     valid_data = data["test"][0]["text"]
-    print(train_data[:100])
+
     tokenize = Tokenizer()
     vocabulary = Vocab()
-    train_data = process_data(train_data, tokenize, vocabulary, FLAGS.batch_size)
-    # valid_data = process_data(valid_data, tokenize, vocabulary, FLAGS.batch_size)
-    print(train_data.shape, len(train_data))
+    train_data, valid_data = process_data(
+        train_data, valid_data, tokenize, vocabulary, FLAGS.batch_size
+    )
+
     charnn = model.create_model(
         seed=FLAGS.seed,
         batch_size=FLAGS.batch_size,
@@ -185,7 +192,7 @@ def main(argv):
 
     print(len(vocabulary.stoi.keys()))
     generated_text = generate_text(
-    charnn, vocabulary, max_length=100, temperature=1.0, start_letter="T"
+        charnn, vocabulary, max_length=100, temperature=1.0, start_letter="T"
     )
     print("Hello Shakespeare: ", generated_text)
 

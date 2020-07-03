@@ -20,12 +20,15 @@ def get_batch(source, seq_len, i):
     return data, target
 
 
-def process_data(data, tokenizer, vocabulary, batch_size):
-    tokenized_text = tokenizer.to_tokens(data, char_level=True)
-    vocab = vocabulary.build_vocab(tokenized_text)
-    numericalized = vocabulary.numericalize(tokenized_text)
-    data_batchified = batchify(np.array(numericalized), batch_size)
-    return data_batchified
+def process_data(train_data, valid_data, tokenizer, vocabulary, batch_size):
+    train_data_tokenized = tokenizer.to_tokens(train_data, char_level=True)
+    valid_data_tokenized = tokenizer.to_tokens(valid_data, char_level=True)
+    vocab = vocabulary.build_vocab(train_data_tokenized)
+    train_data_numericalized = vocabulary.numericalize(train_data_tokenized)
+    train_data_batchified = batchify(np.array(train_data_numericalized), batch_size)
+    valid_data_numericalized = vocabulary.numericalize(valid_data_tokenized)
+    valid_data_batchified = batchify(np.array(valid_data_numericalized), batch_size)
+    return train_data_batchified, valid_data_batchified
 
 
 class Vocab:
