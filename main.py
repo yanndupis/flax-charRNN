@@ -32,10 +32,10 @@ flags.DEFINE_float(
 
 flags.DEFINE_integer("batch_size", default=32, help=("Batch size for training."))
 
-flags.DEFINE_integer("num_epochs", default=20, help=("Number of training epochs."))
+flags.DEFINE_integer("num_epochs", default=40, help=("Number of training epochs."))
 
 flags.DEFINE_integer(
-    "hidden_size", default=200, help=("Hidden size for the LSTM and MLP.")
+    "hidden_size", default=200, help=("Hidden size for the GRU and MLP.")
 )
 
 flags.DEFINE_integer(

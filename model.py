@@ -24,12 +24,12 @@ class Embedding(nn.Module):
         return embed
 
 
-class LSTM(nn.Module):
+class GRU(nn.Module):
     def apply(self, inputs, carry, hidden_size):
 
         batch_size = inputs.shape[0]
         carry, outputs = flax.jax_utils.scan_in_dim(
-            nn.GRUCell.partial(name="lstm_cell"), carry, inputs, axis=1
+            nn.GRUCell.partial(name="gru_cell"), carry, inputs, axis=1
         )
         return carry, outputs.reshape(-1, hidden_size)
 
@@ -50,7 +50,7 @@ class LanguageModel(nn.Module):
             inputs, vocab_size, embedding_size, emb_init=emb_init, name="embed"
         )
 
-        carry, hidden = LSTM(embed, carry, hidden_size=hidden_size, name="lstm")
+        carry, hidden = GRU(embed, carry, hidden_size=hidden_size, name="lstm")
         hidden = nn.Dense(hidden, hidden_size, name="hidden")
         logits = nn.Dense(hidden, output_size, name="logits")
 
