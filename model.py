@@ -34,6 +34,7 @@ class LSTM(nn.Module):
         return carry, outputs.reshape(-1, hidden_size)
 
 
+
 class LanguageModel(nn.Module):
     def apply(
         self,

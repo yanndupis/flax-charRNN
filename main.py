@@ -9,6 +9,7 @@ import flax
 from flax import nn
 from flax import optim
 from flax.training import common_utils
+from flax.training.checkpoints import save_checkpoint, restore_checkpoint
 
 import jax
 from jax import random
@@ -61,13 +62,13 @@ def compute_cross_entropy(logits, targets):
 def train_step(optimizer, inputs, carry, seq_len, targets, rng):
     rng, new_rng = jax.random.split(rng)
 
-    def loss_fn(model):
+    def loss_fn(model, carry):
         with nn.stochastic(rng):
-            _, logits = model(inputs, carry)
+            carry, logits = model(inputs, carry)
             loss = jnp.mean(compute_cross_entropy(logits, targets))
         return loss, (logits, carry)
 
-    (loss, out), grad = jax.value_and_grad(loss_fn, has_aux=True)(optimizer.target)
+    (loss, out), grad = jax.value_and_grad(loss_fn, has_aux=True)(optimizer.target, carry)
     optimizer = optimizer.apply_gradient(grad)
     _, carry = out
     return optimizer, loss, carry, new_rng
@@ -119,27 +120,46 @@ def train_model(
     for epoch in range(num_epochs):
         for i in range(len(train_data) // batch_size):
             data, targets = get_batch(train_data, seq_len, i)
-            optimizer, loss, carry_new, rng = train_step(
+            optimizer, loss, carry, rng = train_step(
                 optimizer, data, carry, seq_len, targets, rng
             )
             train_metrics["loss"] += loss * data.shape[0]
             train_metrics["total"] += data.shape[0]
 
-        valid_metrics = evaluate(optimizer.target, carry_new, valid_data)
-
+        # valid_metrics = evaluate(optimizer.target, carry_new, valid_data)
+        valid_metrics = dict(loss=0)
         log(epoch, train_metrics, valid_metrics)
+
+    save_checkpoint(".", optimizer.target, epoch + 1, keep=1)
+    return optimizer.target
+
+def generate_text(model, vocab, max_length=100, temperature=0.5, start_letter="B"):
+    new_model = restore_checkpoint(".", model)
+    output_text = start_letter
+    carry = nn.GRUCell.initialize_carry(jax.random.PRNGKey(0), (1,), FLAGS.hidden_size)
+
+    for i in range(max_length):
+        input = vocab.numericalize(output_text[-1])
+        input_t = jnp.array(input, dtype=jnp.int32).reshape(1, 1)
+        carry, pred = new_model(input_t, carry)
+        prob = nn.softmax(pred / temperature, axis=1)
+        output_text += vocab.textify(prob.argmax().tolist())[0]
+        # next_char = np.random.choice(65, 1, prob.tolist())
+        # output_text += vocab.textify(next_char.item())[0]
+
+    return output_text
 
 
 def main(argv):
     data = nlp.load_dataset("tiny_shakespeare")
     train_data = data["train"][0]["text"]
     valid_data = data["test"][0]["text"]
-
+    print(train_data[:100])
     tokenize = Tokenizer()
     vocabulary = Vocab()
     train_data = process_data(train_data, tokenize, vocabulary, FLAGS.batch_size)
-    valid_data = process_data(valid_data, tokenize, vocabulary, FLAGS.batch_size)
-
+    # valid_data = process_data(valid_data, tokenize, vocabulary, FLAGS.batch_size)
+    print(train_data.shape, len(train_data))
     charnn = model.create_model(
         seed=FLAGS.seed,
         batch_size=FLAGS.batch_size,
@@ -152,7 +172,7 @@ def main(argv):
         ),
     )
 
-    train_model(
+    trained_model = train_model(
         model=charnn,
         learning_rate=FLAGS.learning_rate,
         num_epochs=FLAGS.num_epochs,
@@ -162,6 +182,12 @@ def main(argv):
         batch_size=FLAGS.batch_size,
         seq_len=FLAGS.seq_len,
     )
+
+    print(len(vocabulary.stoi.keys()))
+    generated_text = generate_text(
+    charnn, vocabulary, max_length=100, temperature=1.0, start_letter="T"
+    )
+    print("Hello Shakespeare: ", generated_text)
 
 
 if __name__ == "__main__":
