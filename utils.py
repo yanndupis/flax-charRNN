@@ -28,19 +28,21 @@ def process_data(train_data, valid_data, tokenizer, vocabulary, batch_size):
     train_data_batchified = batchify(np.array(train_data_numericalized), batch_size)
     valid_data_numericalized = vocabulary.numericalize(valid_data_tokenized)
     valid_data_batchified = batchify(np.array(valid_data_numericalized), batch_size)
-    return train_data_batchified, valid_data_batchified
+    return train_data_batchified, valid_data_batchified, vocabulary.vocab_size
 
 
 class Vocab:
     def __init__(self):
         self.itos = None
         self.stoi = None
+        self.vocab_size = None
 
     def build_vocab(self, tokens):
         self.stoi = collections.defaultdict(
             None, {v: k for k, v in enumerate(set(tokens))}
         )
         self.itos = {self.stoi[k]: k for k in self.stoi}
+        self.vocab_size = len(self.itos.keys())
         return self.stoi
 
     def numericalize(self, tokens):

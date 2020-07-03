@@ -30,7 +30,7 @@ flags.DEFINE_float(
     "learning_rate", default=0.001, help=("The learning rate for the Adam optimizer.")
 )
 
-flags.DEFINE_integer("batch_size", default=35, help=("Batch size for training."))
+flags.DEFINE_integer("batch_size", default=32, help=("Batch size for training."))
 
 flags.DEFINE_integer("num_epochs", default=20, help=("Number of training epochs."))
 
@@ -42,9 +42,7 @@ flags.DEFINE_integer(
     "embedding_size", default=200, help=("Size of the word embeddings.")
 )
 
-flags.DEFINE_integer(
-    "seq_len", default=35, help=("Maximum sequence length in the dataset.")
-)
+flags.DEFINE_integer("seq_len", default=35, help=("Sequence length in the dataset."))
 
 flags.DEFINE_integer(
     "seed", default=0, help=("Random seed for network initialization.")
@@ -59,7 +57,7 @@ def compute_cross_entropy(logits, targets):
 
 
 @jax.jit
-def train_step(optimizer, inputs, carry, seq_len, targets, rng):
+def train_step(optimizer, inputs, carry, targets, rng):
     rng, new_rng = jax.random.split(rng)
 
     def loss_fn(model, carry):
@@ -77,7 +75,7 @@ def train_step(optimizer, inputs, carry, seq_len, targets, rng):
 
 
 @jax.jit
-def eval_step(model, inputs, carry, seq_len, targets):
+def eval_step(model, inputs, carry, targets):
     carry, logits = model(inputs, carry)
     loss = jnp.mean(compute_cross_entropy(logits, targets))
     return loss, carry
@@ -102,10 +100,10 @@ def evaluate(model, dataset):
     )
 
     for i in range(len(dataset) // FLAGS.batch_size):
-        inputs, targets = get_batch(dataset, FLAGS.seq_len, i)
+        inputs, targets = get_batch(dataset, FLAGS.batch_size, i)
         count = count + inputs.shape[0]
-        loss, carry = eval_step(model, inputs, carry, FLAGS.seq_len, targets)
-        total_loss += loss.item()
+        loss, carry = eval_step(model, inputs, carry, targets)
+        total_loss += loss.item() * inputs.shape[0]
 
     loss = total_loss / count
     metrics = dict(loss=loss)
@@ -114,7 +112,7 @@ def evaluate(model, dataset):
 
 
 def train_model(
-    model, learning_rate, num_epochs, seed, train_data, valid_data, batch_size, seq_len
+    model, learning_rate, num_epochs, seed, train_data, valid_data, batch_size
 ):
     train_metrics = collections.defaultdict(float)
     rng = jax.random.PRNGKey(seed)
@@ -125,9 +123,9 @@ def train_model(
 
     for epoch in range(num_epochs):
         for i in range(len(train_data) // batch_size):
-            data, targets = get_batch(train_data, seq_len, i)
+            data, targets = get_batch(train_data, batch_size, i)
             optimizer, loss, carry, rng = train_step(
-                optimizer, data, carry, seq_len, targets, rng
+                optimizer, data, carry, targets, rng
             )
             train_metrics["loss"] += loss * data.shape[0]
             train_metrics["total"] += data.shape[0]
@@ -135,23 +133,26 @@ def train_model(
         valid_metrics = evaluate(optimizer.target, valid_data)
         log(epoch, train_metrics, valid_metrics)
 
-    save_checkpoint(".", optimizer.target, epoch + 1, keep=1)
+    # save_checkpoint(".", optimizer.target, epoch + 1, keep=1)
     return optimizer.target
 
 
-def generate_text(model, vocab, max_length=100, temperature=0.5, start_letter="B"):
-    new_model = restore_checkpoint(".", model)
+def generate_text(
+    model, vocab, max_length=100, temperature=0.5, top_k=3, start_letter="T",
+):
     output_text = start_letter
     carry = nn.GRUCell.initialize_carry(jax.random.PRNGKey(0), (1,), FLAGS.hidden_size)
-
     for i in range(max_length):
         input = vocab.numericalize(output_text[-1])
         input_t = jnp.array(input, dtype=jnp.int32).reshape(1, 1)
-        carry, pred = new_model(input_t, carry)
+        carry, pred = model(input_t, carry)
         prob = nn.softmax(pred / temperature, axis=1)
-        output_text += vocab.textify(prob.argmax().tolist())[0]
-        # next_char = np.random.choice(65, 1, prob.tolist())
-        # output_text += vocab.textify(next_char.item())[0]
+        prob_np = np.array(prob)[0]
+        top_k_index = prob_np.argsort()[-top_k:]
+        next_char = np.random.choice(
+            top_k_index.tolist(), 1, prob_np[top_k_index].tolist()
+        )
+        output_text += vocab.textify(next_char.item())[0]
 
     return output_text
 
@@ -163,19 +164,19 @@ def main(argv):
 
     tokenize = Tokenizer()
     vocabulary = Vocab()
-    train_data, valid_data = process_data(
+    train_data, valid_data, vocab_size = process_data(
         train_data, valid_data, tokenize, vocabulary, FLAGS.batch_size
     )
 
     charnn = model.create_model(
         seed=FLAGS.seed,
         batch_size=FLAGS.batch_size,
+        seq_len=FLAGS.batch_size,
         model_kwargs=dict(
-            seq_len=FLAGS.seq_len,
-            vocab_size=65,
+            vocab_size=vocab_size,
             embedding_size=FLAGS.embedding_size,
             hidden_size=FLAGS.hidden_size,
-            output_size=65,
+            output_size=vocab_size,
         ),
     )
 
@@ -187,12 +188,15 @@ def main(argv):
         train_data=train_data,
         valid_data=valid_data,
         batch_size=FLAGS.batch_size,
-        seq_len=FLAGS.seq_len,
     )
 
-    print(len(vocabulary.stoi.keys()))
     generated_text = generate_text(
-        charnn, vocabulary, max_length=100, temperature=1.0, start_letter="T"
+        trained_model,
+        vocabulary,
+        max_length=100,
+        temperature=0.8,
+        top_k=3,
+        start_letter="T",
     )
     print("Hello Shakespeare: ", generated_text)
 
