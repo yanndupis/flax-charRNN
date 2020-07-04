@@ -1,1 +1,1 @@
-# flax-charRNN
+# Flax CharRNN
