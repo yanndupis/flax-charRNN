@@ -30,9 +30,9 @@ flags.DEFINE_float(
     "learning_rate", default=0.001, help=("The learning rate for the Adam optimizer.")
 )
 
-flags.DEFINE_integer("batch_size", default=32, help=("Batch size for training."))
+flags.DEFINE_integer("batch_size", default=64, help=("Batch size for training."))
 
-flags.DEFINE_integer("num_epochs", default=40, help=("Number of training epochs."))
+flags.DEFINE_integer("num_epochs", default=5, help=("Number of training epochs."))
 
 flags.DEFINE_integer(
     "hidden_size", default=200, help=("Hidden size for the GRU and MLP.")
@@ -103,7 +103,7 @@ def evaluate(model, dataset):
         inputs, targets = get_batch(dataset, FLAGS.batch_size, i)
         count = count + inputs.shape[0]
         loss, carry = eval_step(model, inputs, carry, targets)
-        total_loss += loss.item() * inputs.shape[0]
+        total_loss += loss.item()
 
     loss = total_loss / count
     metrics = dict(loss=loss)
@@ -147,6 +147,7 @@ def generate_text(
         input_t = jnp.array(input, dtype=jnp.int32).reshape(1, 1)
         carry, pred = model(input_t, carry)
         prob = nn.softmax(pred / temperature, axis=1)
+        # output_text += vocab.textify(prob.argmax().tolist())[0]
         prob_np = np.array(prob)[0]
         top_k_index = prob_np.argsort()[-top_k:]
         next_char = np.random.choice(
